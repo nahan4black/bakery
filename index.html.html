@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>새벽 빵집</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #ebe8e2; }
+  body { display: grid; place-items: center; padding: 0 16px; box-sizing: border-box; }
+  .card { width: min(94vw, calc((100vh - 48px) * 2)); max-width: 100%; aspect-ratio: 2 / 1; border-radius: 16px; overflow: hidden; background: #fdfcf8;
+          box-shadow: 0 0 0 1px rgba(40,34,26,.10), 0 18px 50px -18px rgba(40,34,26,.35); touch-action: none; }
+  #stage, #stage svg { display: block; width: 100%; height: 100%; }
+  #stage svg .pp { fill: var(--paper, #fdfdfc); }
+  #stage text { font-family: "Gowun Dodum", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+</style>
+</head>
+<body>
+<div class="card"><div id="stage"></div></div>
+<script>
+// =============================================================== ink library (ported from line-art-animation/lib)
+const NS = 'http://www.w3.org/2000/svg', PAPER = '#fdfdfc', PEN = 1.35;
+function el(tag, a = {}, parent) { const n = document.createElementNS(NS, tag); for (const k in a) n.setAttribute(k, String(a[k])); if (a.fill === PAPER) n.classList.add('pp'); if (parent) parent.appendChild(n); return n; }
+const f = (n) => n.toFixed(2), pt = (p) => `${f(p[0])} ${f(p[1])}`;
+const pen = (p, w = PEN) => el('path', { fill: 'none', stroke: 'currentColor', 'stroke-width': w, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, p);
+const shape = (p, w = PEN) => el('path', { fill: PAPER, stroke: 'currentColor', 'stroke-width': w, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, p);
+const blot = (p) => el('path', { fill: 'currentColor' }, p);
+const paint = (p, c, w = PEN) => el('path', { fill: c, stroke: 'currentColor', 'stroke-width': w, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, p);
+const oval = (cx, cy, rx, ry) => `M${f(cx - rx)} ${f(cy)} a${f(rx)} ${f(ry)} 0 1 0 ${f(2 * rx)} 0 a${f(rx)} ${f(ry)} 0 1 0 ${f(-2 * rx)} 0Z`;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x)), lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+const ease = (t) => smooth(0, 1, t), minJerk = (s) => s * s * s * (10 - 15 * s + 6 * s * s);
+const L2 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
+const wobble = (t, k = 1) => Math.sin(t * 1.3 * k) * 0.6 + Math.sin(t * 2.7 * k + 1.7) * 0.3 + Math.sin(t * 5.1 * k + 4.1) * 0.1;
+let seed = 7; const R = (a = 0, b = 1) => { seed = (seed * 16807) % 2147483647; return a + ((seed - 1) / 2147483646) * (b - a); };
+
+function limb(parent, width, w = PEN) {
+  const g = el('g', {}, parent), fill = el('path', { fill: PAPER }, g), a = pen(g, w), b = pen(g, w), half = (width - w) / 2;
+  return { g, fill, draw(J, gap = [0.4, 0.9]) {
+    const s = J[0], e = J[J.length - 1]; let c = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2];
+    if (J.length === 3) { const m = J[1]; c = [m[0] + 0.55 * (m[0] - c[0]), m[1] + 0.55 * (m[1] - c[1])]; }
+    const P = []; for (let i = 0; i <= 16; i++) { const t = i / 16, u = 1 - t; P.push([u*u*s[0] + 2*u*t*c[0] + t*t*e[0], u*u*s[1] + 2*u*t*c[1] + t*t*e[1]]); }
+    const side = (sg) => P.map((p, i) => { const q = P[Math.min(16, i + 1)], o = P[Math.max(0, i - 1)], dx = q[0] - o[0], dy = q[1] - o[1], l = Math.hypot(dx, dy) || 1; return [p[0] - dy / l * half * sg, p[1] + dx / l * half * sg]; });
+    const Lp = side(1), Rp = side(-1), cut = (arr, g) => arr.slice(0, arr.length - Math.round(g * 2));
+    fill.setAttribute('d', 'M' + Lp.map(pt).join('L') + 'L' + Rp.slice().reverse().map(pt).join('L') + 'Z');
+    a.setAttribute('d', 'M' + cut(Lp, gap[0]).map(pt).join('L')); b.setAttribute('d', 'M' + cut(Rp, gap[1]).map(pt).join('L'));
+  } };
+}
+function joint(a, b, l1, l2, bend = 1) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.min(Math.hypot(dx, dy), l1 + l2 - 0.01), th = Math.atan2(dy, dx);
+  const al = Math.acos(clamp((l1*l1 + d*d - l2*l2) / (2*l1*d), -1, 1));
+  const c1 = [a[0] + l1 * Math.cos(th - al), a[1] + l1 * Math.sin(th - al)], c2 = [a[0] + l1 * Math.cos(th + al), a[1] + l1 * Math.sin(th + al)];
+  return (c1[0] - c2[0]) * bend > 0 ? c1 : c2;
+}
+function shoe(node, A, toe = 0) {
+  const r = toe * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), S = (x, y) => [A[0] + x*c - y*s, A[1] + x*s + y*c];
+  node.setAttribute('d', `M${pt(S(-1.6,-0.6))} L${pt(S(4.6,-0.2))} Q${pt(S(6.6,0.4))} ${pt(S(5.6,1.6))} L${pt(S(-1.4,1.5))} Q${pt(S(-2.2,0.5))} ${pt(S(-1.6,-0.6))}Z`);
+}
+const place = (g, x, y, dir, s) => g.setAttribute('transform', `translate(${f(x)} ${f(y)}) scale(${f(dir * s)} ${f(s)}) translate(-40 -120)`);
+const spring = (k = 40, d = 6) => ({ x: 0, v: 0, step(tg, dt) { this.v += (k * (tg - this.x) - d * this.v) * dt; this.x += this.v * dt; return this.x; } });
+const pendulum = (k = 10, d = 1.1) => ({ a: 0, v: 0, step(F, dt) { this.v += (-this.a * k + F - this.v * d) * dt; this.a += this.v * dt; return this.a; }, kick(v) { this.v += v; } });
+
+// gait: planted foot slides at exactly travel speed, min-jerk swing, heel-off, solved hip height (no sine bob)
+function gait() {
+  const period = 1.05, duty = 0.62, S = 22, lift = 3.2, heelOff = 15, thigh = 23, shin = 23, ankleY = 118.4, ground = 120, toe = 4.2;
+  const reach = (thigh + shin) * 0.983, restHip = ankleY - reach, speed = S / (duty * period);
+  const foot = (u) => {
+    u = ((u % 1) + 1) % 1;
+    if (u < duty) { const x = 40 + S / 2 - S * u / duty, peel = smooth(duty - 0.14, duty, u), th = heelOff * peel * Math.PI / 180, oy = ankleY - ground;
+      return { ankle: [x + toe - toe * Math.cos(th) - oy * Math.sin(th), ground - toe * Math.sin(th) + oy * Math.cos(th)], pitch: heelOff * peel, stance: true }; }
+    const s = (u - duty) / (1 - duty);
+    return { ankle: [40 - S / 2 + S * minJerk(s), ankleY - lift * Math.pow(Math.sin(Math.PI * s), 1.2)], pitch: heelOff * Math.pow(1 - smooth(0, 0.55, s), 1.4), stance: false };
+  };
+  const knee = (hip, A) => joint(hip, A, thigh, shin, 1);
+  return { speed, period, pose(phase, go = 1) {
+    const raw = [foot(phase), foot(phase + 0.5)];
+    if (go < 1) raw.forEach((fo, i) => { const rest = 40 + (i ? -2 : 2); fo.ankle = [rest + (fo.ankle[0] - rest) * go, ankleY + (fo.ankle[1] - ankleY) * go]; fo.pitch *= go; fo.stance = true; });
+    let hipY = restHip;
+    for (const fo of raw) if (fo.stance) { const dx = fo.ankle[0] - 40; hipY = Math.max(hipY, fo.ankle[1] - Math.sqrt(Math.max(1, reach * reach - dx * dx))); }
+    const hip = [40, hipY], feet = raw.map((fo) => ({ ...fo, knee: knee(hip, fo.ankle) }));
+    return { hip, feet, front: feet[0].ankle[0] >= feet[1].ankle[0] ? 0 : 1, bob: hipY - restHip };
+  } };
+}
+
+// day/night palette — τ: 0 midnight · 0.25 dawn · 0.5 noon
+const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const rgb = (c) => `rgb(${c.map((v) => Math.round(v)).join(',')})`;
+const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const lum = (c) => (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+function ramp(keys, u) {
+  u = ((u % 1) + 1) % 1; const n = keys.length; let i = n - 1;
+  for (let j = 0; j < n; j++) if (keys[j][0] <= u) i = j;
+  const [p0, c0] = keys[i], [p1, c1] = keys[(i + 1) % n], span = (i + 1 < n ? p1 : p1 + 1) - p0; let x = u - p0; if (x < 0) x += 1;
+  return mix(hex(c0), hex(c1), ease(x / span));
+}
+const SKY_TOP = [[0,'#0d1222'],[0.19,'#131a30'],[0.235,'#3d4066'],[0.27,'#cfd8e2'],[0.33,'#f3f2ee'],[0.5,'#f6f5f1'],[0.68,'#f3eee4'],[0.735,'#e3c6a6'],[0.762,'#5a5279'],[0.8,'#1b2140'],[0.86,'#0d1222']];
+const SKY_BOT = [[0,'#1a2240'],[0.19,'#283050'],[0.235,'#d49884'],[0.27,'#f3d0b3'],[0.33,'#faf6ee'],[0.5,'#fcfbf7'],[0.68,'#f9efdc'],[0.735,'#f0a379'],[0.762,'#d47f68'],[0.8,'#383a60'],[0.86,'#1a2240']];
+const PAPERS = [[0,'#1a2036'],[0.19,'#1f263e'],[0.235,'#4a4561'],[0.27,'#ede4d8'],[0.33,'#fbf8f1'],[0.5,'#fdfcf8'],[0.68,'#faf4e8'],[0.735,'#f0dbc4'],[0.756,'#5d5571'],[0.8,'#262c48'],[0.86,'#1a2036']];
+function palette(tau) {
+  const top = ramp(SKY_TOP, tau), bottom = ramp(SKY_BOT, tau), paper = ramp(PAPERS, tau), Lp = lum(paper), inkT = smooth(0.56, 0.36, Lp);
+  return { top, bottom, paper, inkT, ink: mix(hex('#1c1c1c'), hex('#efe6cf'), inkT), lamp: smooth(0.78, 0.4, Lp), night: smooth(0.42, 0.1, lum(top)),
+    sunset: smooth(0.215, 0.245, tau) * smooth(0.3, 0.26, tau) };
+}
+const tint = (c, P, k = 0.55) => rgb(mix(hex(c), mix(hex(c), [12, 16, 30], 0.6), P.inkT * k));
+
+// =============================================================== scene
+const W = 960, H = 480, FLOOR = 430, S = 1.3, SP = 1.75, DP = 0.9;
+const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '새벽 빵집: 쟁반을 든 제빵사, 김이 나는 오븐, 창가의 고양이, 창밖의 파란 자동차와 우주선' });
+document.querySelector('#stage').appendChild(svg);
+const defs = el('defs', {}, svg);
+const flt = el('filter', { id: 'ink', x: '-2%', y: '-2%', width: '104%', height: '104%' }, defs);
+el('feTurbulence', { type: 'fractalNoise', baseFrequency: 0.6, numOctaves: 1, seed: 7, result: 'n' }, flt);
+el('feDisplacementMap', { in: 'SourceGraphic', in2: 'n', scale: 0.5, xChannelSelector: 'R', yChannelSelector: 'G', result: 'd' }, flt);
+el('feGaussianBlur', { in: 'd', stdDeviation: 0.12 }, flt);
+const chk = el('pattern', { id: 'chk', width: 3, height: 3, patternUnits: 'userSpaceOnUse' }, defs);
+el('rect', { width: 3, height: 3, fill: PAPER }, chk); el('rect', { width: 1.5, height: 1.5, fill: 'currentColor', opacity: 0.55 }, chk); el('rect', { x: 1.5, y: 1.5, width: 1.5, height: 1.5, fill: 'currentColor', opacity: 0.55 }, chk);
+const skyG = el('linearGradient', { id: 'sky', x1: 0, y1: 96, x2: 0, y2: 300, gradientUnits: 'userSpaceOnUse' }, defs);
+const skyStops = [el('stop', { offset: 0 }, skyG), el('stop', { offset: 1 }, skyG)];
+const radial = (id, c) => { const g = el('radialGradient', { id }, defs); el('stop', { offset: 0, 'stop-color': c, 'stop-opacity': 1 }, g); el('stop', { offset: 0.4, 'stop-color': c, 'stop-opacity': 0.35 }, g); el('stop', { offset: 1, 'stop-color': c, 'stop-opacity': 0 }, g); };
+radial('gFire', '#ff9a4a'); radial('gLamp', '#ffd27a'); radial('gBeam', '#bfe6ff');
+const winClip = el('clipPath', { id: 'win' }, defs); el('rect', { x: 680, y: 96, width: 230, height: 209 }, winClip);
+const mouthD = 'M190 360 L190 316 Q190 289 225 289 Q260 289 260 316 L260 360 Z';
+const mouthClip = el('clipPath', { id: 'mouth' }, defs); el('path', { d: mouthD }, mouthClip);
+
+el('rect', { width: W, height: H, fill: PAPER }, svg);
+const outside = el('g', { 'clip-path': 'url(#win)' }, svg);
+const scene = el('g', { filter: 'url(#ink)' }, svg);
+const glow = el('g', { style: 'mix-blend-mode:screen;pointer-events:none' }, svg);
+const ui = el('g', { style: 'pointer-events:none' }, svg);
+
+// ---------------------------------------------------------------- outside the window: sky, spaceship, houses, blue car
+el('rect', { x: 680, y: 96, width: 230, height: 210, fill: 'url(#sky)' }, outside);
+const stars = [[700,118],[742,140],[808,108],[858,132],[892,112],[770,170],[836,162]].map(([x, y]) => el('circle', { cx: x, cy: y, r: 0.9, fill: '#fff8e0' }, outside));
+const sun = el('circle', { r: 15, stroke: 'currentColor', 'stroke-width': DP }, outside);
+const oScene = el('g', { filter: 'url(#ink)' }, outside);
+// spaceship: a little saucer drifting across the dawn sky
+const ship = el('g', { style: 'cursor:pointer' }, oScene);
+const beam = el('path', { fill: 'url(#gBeam)', opacity: 0 }, ship);
+shape(ship, DP * 1.1).setAttribute('d', 'M-6 -2 Q-5.5 -9 0 -9.4 Q5.5 -9 6 -2 Z');
+const shipDisc = paint(ship, '#9aa8b4', DP * 1.1); shipDisc.setAttribute('d', 'M-15 0 Q-14 -3.4 -6 -3 L6 -3 Q14 -3.4 15 0 Q8 3.2 0 3.2 Q-8 3.2 -15 0Z');
+pen(ship, DP * 0.6).setAttribute('d', 'M-3 -6 Q-1 -7.6 1.5 -7');
+const shipLights = [-9, -3, 3, 9].map((x) => el('circle', { cx: x, cy: 0.9, r: 1.1, fill: '#ffd27a' }, ship));
+el('rect', { x: -18, y: -12, width: 36, height: 18, fill: 'transparent' }, ship).appendChild(el('title', {})).textContent = '우주선';
+// houses across the street
+const HOUSE_D = 'M676 292 L676 246 L708 222 L742 246 L742 292 Z M742 292 L742 236 L792 236 L792 292 Z M792 292 L792 244 L834 212 L876 244 L876 292 Z M876 292 L876 240 L914 240 L914 292 Z';
+el('path', { d: HOUSE_D, fill: PAPER }, oScene);
+const houses = el('g', { opacity: 0.55 }, oScene);
+shape(houses, DP).setAttribute('d', 'M676 292 L676 246 L708 222 L742 246 L742 292 Z M742 292 L742 236 L792 236 L792 292 Z M792 292 L792 244 L834 212 L876 244 L876 292 Z M876 292 L876 240 L914 240 L914 292 Z');
+pen(houses, DP * 0.7).setAttribute('d', 'M756 236 L756 224 L766 224 L766 236 M846 224 L846 210 L854 210 L854 230 M676 246 L742 246');
+const hwin = [[694,258],[716,258],[752,250],[772,250],[752,268],[810,254],[840,254],[886,252],[900,268]].map(([x, y], i) => ({ n: el('rect', { x, y, width: 9, height: 11, fill: '#ffd27a', stroke: 'currentColor', 'stroke-width': DP * 0.7 }, houses), on: 0.35 + (i * 0.137) % 0.5 }));
+pen(oScene, DP).setAttribute('d', 'M676 292 L914 292 M676 300 L914 300');
+// street lamp outside
+pen(oScene, DP).setAttribute('d', 'M902 300 L902 248 Q902 242 896 242');
+const sLamp = shape(oScene, DP * 0.8); sLamp.setAttribute('d', 'M890 242 L898 242 L896 246 L892 246Z');
+// the blue car
+const car = el('g', { style: 'cursor:pointer' }, oScene);
+const carBody = paint(car, '#3c6fb8', DP * 1.1);
+carBody.setAttribute('d', 'M-30 -5 Q-31 -12 -24 -13 L-15 -14 Q-10 -24 0 -24 L9 -24 Q16 -24 21 -14 L28 -12.5 Q32 -11 31 -5 Z');
+const carWin = shape(car, DP * 0.8); carWin.setAttribute('d', 'M-12 -14 Q-8 -21.4 -1 -21.6 L-1 -14 Z M2 -14 L2 -21.6 L8 -21.6 Q14 -21 17 -14 Z');
+pen(car, DP * 0.6).setAttribute('d', 'M-4 -11 L-1 -11 M-22 -9 L26 -9');
+const lights = [blot(car), blot(car)]; lights[0].setAttribute('d', oval(29.5, -9.5, 1.4, 1.6)); lights[1].setAttribute('d', oval(-29.6, -9.5, 1, 1.4));
+const wheels = [-18, 18].map((x) => { const g = el('g', {}, car); shape(g, DP * 1.1).setAttribute('d', oval(0, 0, 5.4, 5.4)); const sp = pen(g, DP * 0.6); return { g, x, sp }; });
+el('rect', { x: -32, y: -26, width: 64, height: 32, fill: 'transparent' }, car).appendChild(el('title', {})).textContent = '파란 자동차';
+
+// ---------------------------------------------------------------- room
+const room = el('g', {}, scene);
+pen(room, SP).setAttribute('d', 'M0 24 Q480 26 960 24 M0 31 Q480 33 960 31');
+pen(room, DP).setAttribute('d', Array.from({ length: 12 }, (_, i) => `M${i * 86 + 30} 24 L${i * 86 + 30} 31`).join(' '));
+pen(room, SP).setAttribute('d', `M0 ${FLOOR} Q480 ${FLOOR + 1} 960 ${FLOOR} M0 ${FLOOR - 7} L28 ${FLOOR - 7} M300 ${FLOOR - 7} L960 ${FLOOR - 7}`);
+pen(room, DP).setAttribute('d', `M0 448 Q480 449.5 960 448 M0 468 Q480 469.5 960 468 ` + Array.from({ length: 14 }, (_, i) => `M${i * 74 + (i % 2) * 30} ${i % 2 ? 448 : 430} l0 ${i % 2 ? 20 : 18}`).join(' '));
+// wall tiles behind the table
+pen(room, DP * 0.6).setAttribute('d', [312, 326, 340, 354].map((y) => `M462 ${y} L664 ${y}`).join(' ') + ' ' + Array.from({ length: 40 }, (_, i) => { const r = i % 4, c = (i / 4) | 0; return `M${470 + c * 20 + (r % 2) * 10} ${298 + r * 14} l0 14`; }).join(' '));
+// shelf with jars
+pen(room, SP).setAttribute('d', 'M470 226 L660 226 M470 232 L660 232 M490 232 Q492 246 504 246 M640 232 Q638 246 626 246');
+[[496, 26, 12, '설탕'], [528, 20, 10, ''], [556, 30, 14, '밀가루']].forEach(([x, h, w, label]) => {
+  shape(room, SP * 0.9).setAttribute('d', `M${x - w / 2} 226 L${x - w / 2} ${226 - h + 4} Q${x - w / 2} ${226 - h} ${x - w / 2 + 3} ${226 - h} L${x + w / 2 - 3} ${226 - h} Q${x + w / 2} ${226 - h} ${x + w / 2} ${226 - h + 4} L${x + w / 2} 226Z`);
+  blot(room).setAttribute('d', `M${x - w / 2 - 1} ${226 - h - 1} L${x + w / 2 + 1} ${226 - h - 1} L${x + w / 2} ${226 - h - 4} L${x - w / 2} ${226 - h - 4}Z`);
+  if (label) { const t = el('text', { x, y: 226 - h / 2 + 3, 'font-size': 6, 'text-anchor': 'middle', fill: 'currentColor' }, room); t.textContent = label; }
+});
+shape(room, SP * 0.9).setAttribute('d', 'M590 226 Q588 214 596 212 L620 212 Q628 214 626 226Z M594 212 Q608 206 622 212');
+pen(room, DP).setAttribute('d', 'M640 214 Q642 200 650 196 M640 214 Q636 202 630 198 M644 207 Q650 205 652 208');
+shape(room, SP * 0.8).setAttribute('d', 'M634 226 L636 214 L648 214 L650 226Z');
+// chalkboard
+pen(room, DP).setAttribute('d', 'M330 106 L387 86 L444 106');
+blot(room).setAttribute('d', oval(387, 86, 1.6, 1.6));
+paint(room, '#7a5a3c', SP).setAttribute('d', 'M326 104 L448 104 L449 190 L325 191Z');
+const board = paint(room, '#2f3b37', DP); board.setAttribute('d', 'M333 111 L441 111 L442 183 L332 184Z');
+const chalk = el('g', { fill: '#ece6d4', 'font-size': 11 }, room);
+[['오늘의 빵', 387, 129, 12], ['· 깜빠뉴', 350, 148, 10], ['· 바게트', 350, 163, 10], ['· 우유식빵', 350, 178, 10]].forEach(([s, x, y, fs], i) => { const t = el('text', { x, y, 'font-size': fs, 'text-anchor': i ? 'start' : 'middle' }, chalk); t.textContent = s; });
+el('path', { d: 'M412 168 Q424 156 434 166 Q424 174 412 168Z M417 166 l3 -3 M422 167 l3 -3 M427 167 l3 -3', fill: 'none', stroke: '#ece6d4', 'stroke-width': 0.9 }, chalk);
+// window frame and sill
+const frame = el('path', { fill: PAPER, 'fill-rule': 'evenodd', stroke: 'currentColor', 'stroke-width': SP, 'stroke-linejoin': 'round', d: 'M672 88 L918 88 L918 305 L672 305Z M680 96 L910 96 L910 305 L680 305Z' }, room);
+frame.classList.add('pp');
+shape(room, SP).setAttribute('d', 'M792 96 L798 96 L798 305 L792 305Z M680 197 L910 197 L910 203 L680 203Z');
+shape(room, SP).setAttribute('d', 'M662 305 Q795 303 928 305 L926 318 Q795 316 664 318Z');
+pen(room, SP).setAttribute('d', 'M676 318 Q680 330 692 332 M914 318 Q910 330 898 332');
+// work table with a cooling cloth
+const TABLE_Y = 372;
+shape(room, SP).setAttribute('d', `M468 ${TABLE_Y} L662 ${TABLE_Y} L662 ${TABLE_Y + 9} L468 ${TABLE_Y + 9}Z`);
+shape(room, SP).setAttribute('d', `M478 381 L486 381 L486 ${FLOOR} L478 ${FLOOR}Z M644 381 L652 381 L652 ${FLOOR} L644 ${FLOOR}Z`);
+pen(room, SP).setAttribute('d', 'M486 410 L644 410');
+shape(room, SP).setAttribute('d', 'M520 410 Q514 388 526 384 Q534 380 546 384 Q556 388 552 410Z M526 384 Q536 378 546 384');
+const flourT = el('text', { x: 536, y: 401, 'font-size': 7, 'text-anchor': 'middle', fill: 'currentColor' }, room); flourT.textContent = '밀가루';
+shape(room, SP * 0.9).setAttribute('d', 'M576 410 L578 394 L612 394 L614 410Z');
+const cloth = paint(room, '#e9e0cc', DP); cloth.setAttribute('d', 'M492 372 L644 372 L646 377 Q620 380 610 376 L494 377Z');
+
+// ---------------------------------------------------------------- oven (brick, wood-fired)
+const oven = el('g', { style: 'cursor:pointer' }, scene);
+pen(oven, SP).setAttribute('d', 'M152 31 L152 196 M180 31 L180 196');
+pen(oven, DP).setAttribute('d', 'M150 70 L182 70 M150 76 L182 76 M150 150 L182 150 M150 156 L182 156');
+shape(oven, SP).setAttribute('d', 'M34 362 C30 262 92 196 166 196 C240 196 302 262 298 362Z');
+pen(oven, DP * 0.7).setAttribute('d', 'M58 300 Q70 268 92 248 M48 330 Q56 296 72 276 M104 222 Q126 210 150 207 M196 208 Q222 214 238 226 M84 262 l6 6 M64 310 l7 3 M118 216 l3 7 M216 214 l-2 7');
+// thermometer dial
+shape(oven, SP * 0.9).setAttribute('d', oval(112, 270, 10, 10));
+const needle = pen(oven, DP);
+pen(oven, DP * 0.6).setAttribute('d', 'M104 270 l2 0 M112 262 l0 2 M120 270 l-2 0');
+// mouth
+const mouthDark = el('path', { d: mouthD, fill: '#2a1a12' }, oven);
+const fireG = el('g', { 'clip-path': 'url(#mouth)' }, oven);
+const flames = [['#e0782f', 202, 18], ['#f2b04e', 214, 22], ['#e0782f', 232, 16], ['#f6d27a', 222, 12]].map(([c, x, h]) => ({ n: el('path', { fill: c }, fireG), x, h }));
+fireG.prepend(el('path', { d: 'M196 360 L198 354 L252 352 L254 358Z M202 354 L204 349 L224 347 L222 352Z', fill: '#24150d' }));
+pen(oven, SP).setAttribute('d', mouthD.replace(' Z', ''));
+pen(oven, DP).setAttribute('d', 'M180 362 L180 316 Q180 279 225 279 Q270 279 270 316 L270 362 ' + [-60, -30, 0, 30, 60].map((a) => { const r = a * Math.PI / 180; return `M${f(225 + 36 * Math.sin(r))} ${f(316 - 27 * Math.cos(r) - 2)} L${f(225 + 46 * Math.sin(r))} ${f(316 - 37 * Math.cos(r) - 2)}`; }).join(' ') + ' M180 330 l-10 0 M270 330 l10 0');
+// platform with log store
+shape(oven, SP).setAttribute('d', `M28 360 L304 360 L304 ${FLOOR} L28 ${FLOOR}Z`);
+pen(oven, DP * 0.7).setAttribute('d', `M28 395 L304 395 M90 360 l0 35 M170 360 l0 35 M250 360 l0 35 M130 395 l0 35 M210 395 l0 35 M280 395 l0 35`);
+shape(oven, SP).setAttribute('d', `M54 ${FLOOR} L54 392 Q54 374 82 374 Q110 374 110 392 L110 ${FLOOR}Z`);
+[[66, 422], [82, 422], [98, 422], [74, 408], [90, 408], [82, 394]].forEach(([x, y]) => { shape(oven, DP * 1.2).setAttribute('d', oval(x, y, 7, 7)); pen(oven, DP * 0.5).setAttribute('d', oval(x, y, 3, 3)); });
+// wooden peel leaning on the platform
+pen(oven, SP).setAttribute('d', 'M14 428 L4 258 M18 428 L8 258');
+paint(oven, '#b88a58', SP).setAttribute('d', 'M2 258 Q-4 236 6 228 Q16 236 12 258Z');
+el('path', { d: 'M30 196 L300 196 L300 430 L30 430Z', fill: 'transparent' }, oven).appendChild(el('title', {})).textContent = '오븐';
+
+// ---------------------------------------------------------------- cat on the window sill
+const CAT = { x: 800, y: 305, k: 2 };
+const catG = el('g', { style: 'cursor:pointer', transform: `translate(${CAT.x} ${CAT.y}) scale(${CAT.k})` }, scene);
+const CP = SP / CAT.k;
+const POSES = {
+  sleep:   { S: [-7, -6.4], H: [7, -6.6], Bc: [0, -9.4], C: [-9, -0.2], Bt: [9.6, -0.2], hd: [-10.6, -3.6], tilt: 30, ear: 0.4, eye: 0, mouth: 0, F1: [-11, 0], F2: [-8.6, 0], T0: [9, -2], T1: [6, 3], T2: [-5, 1.2] },
+  sit:     { S: [-4.4, -12.6], H: [4.6, -5.4], Bc: [2.2, -11.4], C: [-6.4, -1.4], Bt: [6.6, -0.2], hd: [-5.4, -17.6], tilt: 0, ear: 1, eye: 1, mouth: 0, F1: [-5.6, 0], F2: [-3.4, 0], T0: [6.6, -1], T1: [13, 0.6], T2: [15.6, -4.4] },
+  look:    { S: [-4.4, -12.6], H: [4.6, -5.4], Bc: [2.2, -11.4], C: [-6.4, -1.4], Bt: [6.6, -0.2], hd: [-3.6, -18], tilt: -8, ear: 1, eye: 1, mouth: 0, F1: [-5.6, 0], F2: [-3.4, 0], T0: [6.6, -1], T1: [13, 0.6], T2: [15.6, -4.4] },
+  yawn:    { S: [-4.4, -12.8], H: [4.6, -5.4], Bc: [2.2, -11.6], C: [-6.4, -1.4], Bt: [6.6, -0.2], hd: [-5.6, -18.6], tilt: -18, ear: 0.6, eye: 0, mouth: 1, F1: [-5.6, 0], F2: [-3.4, 0], T0: [6.6, -1], T1: [13, 0.6], T2: [15.6, -4.4] },
+  stretch: { S: [-9.4, -4.6], H: [5.4, -11.6], Bc: [-1, -8.6], C: [-11, -1], Bt: [7.4, -3.6], hd: [-15.6, -6.6], tilt: -6, ear: 0.7, eye: 0.3, mouth: 0, F1: [-17.6, 0], F2: [-15, 0], T0: [7, -9.6], T1: [10, -17], T2: [8.6, -22] },
+};
+const lerpPose = (a, b, t) => { const o = {}; for (const k in a) o[k] = Array.isArray(a[k]) ? L2(a[k], b[k], t) : lerp(a[k], b[k], t); return o; };
+const CAT_SEQ = [['sit', 0.7], ['yawn', 0.9], ['sit', 0.5], ['stretch', 1.5], ['sit', 1.2], ['sleep', 1.2]];
+const cat = (() => {
+  const g = catG;
+  const tailOut = el('path', { fill: 'none', stroke: 'currentColor', 'stroke-width': 3.1, 'stroke-linecap': 'round' }, g);
+  const tailIn = el('path', { fill: 'none', stroke: '#8d8f94', 'stroke-width': 1.5, 'stroke-linecap': 'round' }, g);
+  const legs = pen(g, CP * 1.6), body = shape(g, CP), patch = el('path', { fill: '#8d8f94' }, g), paws = shape(g, CP * 0.7);
+  const headG = el('g', {}, g);
+  const ears = el('path', { fill: PAPER, stroke: 'currentColor', 'stroke-width': CP * 0.9, 'stroke-linejoin': 'round' }, headG);
+  el('ellipse', { cx: 0, cy: 0, rx: 4.6, ry: 4.1, fill: PAPER, stroke: 'currentColor', 'stroke-width': CP }, headG);
+  const cap = el('path', { fill: '#8d8f94', d: 'M-4.4 -1.2 Q-3.6 -3.8 -0.6 -4 Q1.4 -3.6 2.6 -2.2 Q-1 -2.6 -4.4 -1.2Z' }, headG);
+  const face = pen(headG, CP * 0.6), mouth = el('path', { fill: '#6a2a2a', stroke: 'currentColor', 'stroke-width': CP * 0.5 }, headG);
+  el('rect', { x: -20, y: -26, width: 42, height: 28, fill: 'transparent' }, g).appendChild(el('title', {})).textContent = '고양이';
+  let seqT = -1, interest = 0, interestT = 0, idle = 2, flick = 0, ear = 0, lookAt = 'sit';
+  return {
+    poke() { if (seqT < 0) seqT = 0; },
+    notice(kind, secs) { interestT = Math.max(interestT, secs); lookAt = kind; },
+    draw(t, dt, P) {
+      interestT -= dt; interest = clamp(interest + (interestT > 0 ? dt * 1.6 : -dt * 0.7), 0, 1);
+      let pose;
+      if (seqT >= 0) {
+        seqT += dt; let acc = 0, prev = 'sleep', cur = CAT_SEQ[0][0], u = 1;
+        for (const [name, d] of CAT_SEQ) { if (seqT < acc + d) { cur = name; u = (seqT - acc) / d; break; } acc += d; prev = name; cur = name; }
+        if (seqT > acc + 0.01 && cur === 'sleep' && u === 1) seqT = -1;
+        pose = lerpPose(POSES[prev], POSES[cur], ease(Math.min(1, u * 1.6)));
+      } else pose = lerpPose(POSES.sleep, POSES[lookAt], ease(interest));
+      const br = Math.sin(t * 1.8) * 0.35;
+      idle -= dt; if (idle < 0) { idle = R(2, 6); if (R() < 0.6) flick = 1; else ear = 1; }
+      flick = Math.max(0, flick - dt * 1.6); ear = Math.max(0, ear - dt * 3);
+      const Sx = [pose.S[0], pose.S[1] - br], Hx = [pose.H[0], pose.H[1] - br * 0.6], B = [pose.Bc[0], pose.Bc[1] - br * 1.2], C = pose.C, Bt = pose.Bt;
+      body.setAttribute('d', `M${pt(C)} Q${f(C[0] - 2)} ${f((C[1] + Sx[1]) / 2)} ${pt(Sx)} Q${pt(B)} ${pt(Hx)} Q${f(Hx[0] + 4)} ${f((Hx[1] + Bt[1]) / 2)} ${pt(Bt)} Q${f((Bt[0] + C[0]) / 2)} ${f(Math.max(Bt[1], C[1]) + 1)} ${pt(C)}Z`);
+      const m = L2(Sx, Hx, 0.55);
+      patch.setAttribute('d', `M${f(m[0] - 3.4)} ${f(m[1] + 0.6)} Q${f(m[0])} ${f(m[1] - 3)} ${f(m[0] + 4)} ${f(m[1] + 0.2)} Q${f(m[0] + 1)} ${f(m[1] + 3.6)} ${f(m[0] - 3.4)} ${f(m[1] + 0.6)}Z`);
+      const grey = tint('#8d8f94', P, 0.4); patch.setAttribute('fill', grey); tailIn.setAttribute('stroke', grey); cap.setAttribute('fill', grey);
+      const fl = Math.sin(t * 14) * 2.5 * flick, T0 = pose.T0, T1 = pose.T1, T2 = [pose.T2[0] + fl, pose.T2[1] - fl * 0.4];
+      tailOut.setAttribute('d', `M${pt(T0)} Q${pt(T1)} ${pt(T2)}`); tailIn.setAttribute('d', `M${pt(T0)} Q${pt(T1)} ${pt(T2)}`);
+      const sh = [Sx[0] + 1.4, Sx[1] + 4];
+      legs.setAttribute('d', `M${pt(sh)} L${pt(pose.F1)} M${f(sh[0] + 1.6)} ${f(sh[1])} L${pt(pose.F2)}`);
+      paws.setAttribute('d', `${oval(pose.F1[0] - 0.4, pose.F1[1] - 0.6, 1.5, 0.9)} ${oval(pose.F2[0] - 0.4, pose.F2[1] - 0.6, 1.5, 0.9)}`);
+      const sniff = interest > 0.8 && lookAt === 'sit' ? Math.max(0, Math.sin(t * 9)) * 0.5 : 0;
+      headG.setAttribute('transform', `translate(${f(pose.hd[0] - sniff)} ${f(pose.hd[1] - br)}) rotate(${f(pose.tilt)})`);
+      const e = pose.ear, tw = ear * 0.6;
+      ears.setAttribute('d', `M-4 -2 L${f(-4.2 - (1 - e) * 1.4)} ${f(-7.4 + (1 - e) * 3 + tw)} L-1 -3.6Z M1.4 -3.8 L${f(3.6 + (1 - e) * 1.6)} ${f(-7.2 + (1 - e) * 3)} L4.4 -1.8Z`);
+      face.setAttribute('d', (pose.eye > 0.5 ? 'M-2.6 -0.4 a0.6 0.8 0 1 0 0.1 0 M1 -0.4 a0.6 0.8 0 1 0 0.1 0' : 'M-3.2 -0.2 q0.7 0.7 1.4 0 M0.6 -0.2 q0.7 0.7 1.4 0') + ' M-1.2 1.4 l0.6 0.5 l0.6 -0.5 M-4.4 1.6 l-3.6 -0.4 M-4.4 2.4 l-3.4 0.8 M2.6 1.8 l3.4 -0.2');
+      mouth.setAttribute('d', pose.mouth > 0.1 ? oval(-0.6, 2.6, 1.2 * pose.mouth, 1.5 * pose.mouth) : '');
+    },
+  };
+})();
+
+// ---------------------------------------------------------------- baker (figure space: ~95 tall, feet y 120, facing +x)
+const fig = el('g', { style: 'cursor:pointer' }, scene);
+el('title', {}, fig).textContent = '제빵사';
+const upperT = () => el('g', {}, fig);
+const up0 = upperT();
+const farArm = limb(up0, 3.8), farHand = shape(up0);
+const legsG = el('g', {}, fig);
+const legs = [limb(legsG, 4.4), limb(legsG, 4.4)]; legs.forEach((l) => { l.fill.classList.remove('pp'); l.fill.setAttribute('fill', 'url(#chk)'); });
+const shoes = [blot(legsG), blot(legsG)];
+const up1 = upperT();
+const jacket = shape(up1), collar = pen(up1, PEN * 0.8), buttons = blot(up1);
+const headG = el('g', {}, up1);
+const neck = pen(headG, PEN), hair = blot(headG);
+const head = el('ellipse', { rx: 3.8, ry: 4.6, fill: PAPER, stroke: 'currentColor', 'stroke-width': PEN }, headG);
+const ear = pen(headG, PEN * 0.6), band = shape(headG), puff = shape(headG), pleats = pen(headG, PEN * 0.55);
+const apron = paint(fig, '#6f8fae'), apronTie = pen(fig, PEN * 0.8);
+const up2 = upperT();
+const nearArm = limb(up2, 3.8);
+const trayG = el('g', {}, up2);
+const tray = shape(trayG, PEN * 0.9);
+tray.setAttribute('d', 'M-8 -1.8 L32 -1.8 Q33.6 -1.8 34 -3.6 L34.6 -3.6 Q34.4 0 32 0.4 L-8 0.4 Q-10.2 0 -10 -3.6 L-9.4 -3.6 Q-9.4 -1.8 -8 -1.8Z');
+const LOAF = '#d29a52';
+const loafD = (cx, cy, rx = 6.6, ry = 4.4) => `M${f(cx - rx)} ${f(cy + ry * 0.55)} Q${f(cx - rx)} ${f(cy - ry)} ${f(cx)} ${f(cy - ry)} Q${f(cx + rx)} ${f(cy - ry)} ${f(cx + rx)} ${f(cy + ry * 0.55)} Q${f(cx)} ${f(cy + ry * 0.8)} ${f(cx - rx)} ${f(cy + ry * 0.55)}Z`;
+const scoreD = (cx, cy, k = 1) => `M${f(cx - 3.4 * k)} ${f(cy - 1.2 * k)} q${f(1.4 * k)} ${f(-1.6 * k)} ${f(3 * k)} ${f(-1.6 * k)} M${f(cx - 0.6 * k)} ${f(cy + 0.4 * k)} q${f(1.4 * k)} ${f(-1.6 * k)} ${f(3 * k)} ${f(-1.6 * k)}`;
+const trayLoaves = [2, 13, 24].map((x) => { const g = el('g', {}, trayG); const b = paint(g, LOAF, PEN * 0.9); b.setAttribute('d', loafD(x, -6)); pen(g, PEN * 0.5).setAttribute('d', scoreD(x, -6)); return { g, b, x }; });
+const nearHand = shape(up2);
+const uppers = [up0, up1, up2];
+
+// loaves on the cooling cloth
+const flyLayer = el('g', {}, scene);
+const SLOTS = Array.from({ length: 9 }, (_, i) => [506 + i * 16.5, 367]);
+const tableLoaves = SLOTS.map(([x, y]) => { const g = el('g', { opacity: 0 }, flyLayer); const b = paint(g, LOAF, SP * 0.9); b.setAttribute('d', loafD(0, 0, 8, 5.4)); pen(g, DP * 0.6).setAttribute('d', scoreD(0, 0, 1.2)); return { g, b, x, y, fresh: 0, fly: null }; });
+
+// pendant lamp
+const lampG = el('g', { style: 'cursor:pointer' }, scene);
+const cord = pen(lampG, DP);
+const shadeG = el('g', {}, lampG);
+shape(shadeG, SP).setAttribute('d', 'M-14 12 Q-12 2 -4 0 L4 0 Q12 2 14 12 Q0 14.5 -14 12Z');
+pen(shadeG, DP).setAttribute('d', 'M-2 0 L-2 -3 L2 -3 L2 0');
+const bulb = shape(shadeG, DP); bulb.setAttribute('d', oval(0, 14, 3.6, 2.6));
+el('circle', { cx: 0, cy: 6, r: 16, fill: 'transparent' }, shadeG).appendChild(el('title', {})).textContent = '램프';
+
+// steam
+const steamLayer = el('g', { style: 'pointer-events:none' }, scene);
+const wisps = Array.from({ length: 48 }, () => ({ n: el('path', { fill: 'none', stroke: 'currentColor', 'stroke-width': DP * 1.15, 'stroke-linecap': 'round', opacity: 0 }, steamLayer), on: false }));
+
+// glows
+const fireGlow = el('ellipse', { cx: 225, cy: 330, rx: 150, ry: 110, fill: 'url(#gFire)' }, glow);
+const lampGlow = el('circle', { r: 150, fill: 'url(#gLamp)' }, glow);
+const winGlows = hwin.map((w) => el('circle', { cx: +w.n.getAttribute('x') + 4.5, cy: +w.n.getAttribute('y') + 5.5, r: 14, fill: 'url(#gLamp)' }, glow));
+const sLampGlow = el('circle', { cx: 894, cy: 248, r: 30, fill: 'url(#gLamp)' }, glow);
+const carGlow = el('ellipse', { rx: 36, ry: 10, fill: 'url(#gLamp)' }, glow);
+const shipGlow = el('circle', { r: 24, fill: 'url(#gBeam)' }, glow);
+
+// readouts
+const clock = el('text', { x: 942, y: 462, 'font-size': 12, 'text-anchor': 'end', fill: 'currentColor', opacity: 0.55 }, ui);
+const hint = el('text', { x: 18, y: 462, 'font-size': 11, fill: 'currentColor', opacity: 0.4 }, ui);
+hint.textContent = '고양이 · 오븐 · 램프 · 제빵사 · 창밖을 눌러 보세요';
+
+// =============================================================== behaviour
+const walk = gait();
+const OX = 300, TX = 430;
+const B = { x: 336, dir: 1, phase: 0.2, st: 'walk', t: 0, target: TX, loaded: true, go: 0, walkT: 0.6, nod: -1, filled: 0, launched: [false, false, false] };
+const arm = [spring(60, 9), spring(60, 9)], trayP = pendulum(40, 6), handY = spring(80, 12);
+const lamp = pendulum(9, 0.6); let fireBoost = 0, catKicked = 0;
+const CARP = { t: 3, speed: 70 }, SHIP = { t: 9, zip: -1, dir: 1 };
+let wind = 0.2, windAim = 0.2, lastPX = null, lastPT = 0;
+svg.addEventListener('pointermove', (e) => { const now = performance.now(); if (lastPX !== null) windAim = clamp(windAim + (e.clientX - lastPX) / Math.max(8, now - lastPT) * 0.8, -2.4, 2.4); lastPX = e.clientX; lastPT = now; });
+
+let stAcc = { oven: 0, tray: 0, table: 0 };
+function spawn(x, y, big = 1) { const w = wisps.find((w) => !w.on); if (!w) return; Object.assign(w, { on: true, x, y, age: 0, life: R(2.2, 3.4) * big, v: R(14, 22), seed: R(0, 6.28), amp: R(2, 4) * big, h: R(10, 18) * big }); }
+const sceneOf = (node, x, y) => { const m = scene.getCTM().inverse().multiply(node.getCTM()); return [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f]; };
+
+fig.addEventListener('pointerdown', () => { if (B.nod < 0) B.nod = 0; });
+oven.addEventListener('pointerdown', () => { fireBoost = 1; for (let i = 0; i < 6; i++) spawn(R(196, 254), R(288, 296), 1.3); });
+lampG.addEventListener('pointerdown', () => lamp.kick(lamp.a >= 0 ? 1.6 : -1.6));
+catG.addEventListener('pointerdown', () => cat.poke());
+car.addEventListener('pointerdown', () => { CARP.honk = 0.6; cat.notice('look', 2.5); });
+ship.addEventListener('pointerdown', () => { if (SHIP.zip < 0) SHIP.zip = 0; });
+
+let tau = 0.205;
+const TAU_RATE = 0.0011;
+
+function draw(t, dt) {
+  tau = (0.205 + t * TAU_RATE) % 1;
+  const P = palette(tau);
+  svg.style.color = rgb(P.ink); svg.style.setProperty('--paper', rgb(P.paper));
+  windAim = lerp(windAim, 0.2 + 0.25 * Math.sin(t * 0.21), 0.012); wind = lerp(wind, windAim, 0.05);
+  const hh = Math.floor(tau * 24), mm = Math.floor((tau * 24 - hh) * 60);
+  clock.textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+
+  // ---- outside
+  skyStops[0].setAttribute('stop-color', rgb(P.top)); skyStops[1].setAttribute('stop-color', rgb(P.bottom));
+  stars.forEach((s, i) => s.setAttribute('opacity', f(P.night * (0.6 + 0.4 * Math.sin(t * 2 + i * 1.7)))));
+  const sunU = clamp((tau - 0.235) / 0.12, 0, 1);
+  sun.setAttribute('cx', f(735 + sunU * 30)); sun.setAttribute('cy', f(300 - sunU * 150));
+  sun.setAttribute('fill', rgb(mix(hex('#f2a36a'), hex('#fbf3dc'), smooth(0.25, 0.32, tau))));
+  sun.setAttribute('opacity', f(smooth(0.225, 0.245, tau) * smooth(0.8, 0.74, tau)));
+  hwin.forEach((w, i) => { const lit = P.lamp > w.on && !(i % 3 === 1 && tau > 0.23) ? 1 : 0; w.n.setAttribute('fill', lit ? '#ffd27a' : rgb(P.paper)); winGlows[i].setAttribute('opacity', f(lit * P.lamp * 0.8)); });
+  sLamp.setAttribute('fill', P.lamp > 0.5 ? '#ffd27a' : rgb(P.paper)); sLampGlow.setAttribute('opacity', f(P.lamp > 0.5 ? P.lamp : 0));
+  // blue car: passes along the street every ~16 s, wheels roll without slipping
+  CARP.t += dt; const carCycle = 16, ct = CARP.t % carCycle, cx = 640 + ct * CARP.speed;
+  car.setAttribute('transform', `translate(${f(cx)} 297)`);
+  wheels.forEach((w) => { const a = (cx / 5.4) % (Math.PI * 2); w.g.setAttribute('transform', `translate(${w.x} -5)`); w.sp.setAttribute('d', [0, 1, 2].map((k) => { const r = a + k * 2.094; return `M0 0 L${f(4.4 * Math.cos(r))} ${f(4.4 * Math.sin(r))}`; }).join(' ')); });
+  carBody.setAttribute('fill', tint('#3c6fb8', P, 0.4));
+  const headOn = P.lamp > 0.45; lights[0].setAttribute('fill', headOn ? '#ffe39a' : 'currentColor');
+  carGlow.setAttribute('cx', f(cx + 40)); carGlow.setAttribute('cy', 288); carGlow.setAttribute('opacity', f(headOn ? P.lamp * 0.9 : 0));
+  if (Math.abs(cx - CAT.x) < 1.2) cat.notice('look', 2.2);
+  if (CARP.honk > 0) { CARP.honk -= dt; car.setAttribute('transform', `translate(${f(cx)} ${f(297 - Math.abs(Math.sin(t * 40)) * 0.8)})`); }
+  // spaceship: slow drift across the sky with a gentle bob; click → it hops away in a hurry
+  SHIP.t += dt; const shipCycle = 26, su = (SHIP.t % shipCycle) / shipCycle;
+  let sx = 660 + su * 290, sy = 140 + Math.sin(su * Math.PI * 2) * 14 + Math.sin(t * 2.1) * 1.6, srot = Math.sin(t * 1.3) * 4;
+  if (SHIP.zip >= 0) { SHIP.zip += dt; const z = SHIP.zip; sx += ease(clamp(z / 0.9, 0, 1)) * 90; sy -= Math.sin(clamp(z / 0.9, 0, 1) * Math.PI) * 40; srot += 18 * Math.sin(clamp(z, 0, 1) * Math.PI); if (z > 1.1) { SHIP.zip = -1; SHIP.t += shipCycle * (1 - su); } }
+  ship.setAttribute('transform', `translate(${f(sx)} ${f(sy)}) rotate(${f(srot)})`);
+  shipDisc.setAttribute('fill', tint('#9aa8b4', P, 0.3));
+  shipLights.forEach((l, i) => l.setAttribute('opacity', f(0.3 + 0.7 * (Math.floor(t * 4) % 4 === i ? 1 : 0))));
+  const beamOn = smooth(0.4, 0.5, su) * smooth(0.62, 0.52, su) * (SHIP.zip < 0 ? 1 : 0);
+  beam.setAttribute('d', `M-5 3 L5 3 L${f(14)} 60 L${f(-14)} 60Z`); beam.setAttribute('opacity', f(beamOn * 0.45));
+  shipGlow.setAttribute('cx', f(sx)); shipGlow.setAttribute('cy', f(sy)); shipGlow.setAttribute('opacity', f(0.25 + 0.5 * P.night));
+  if (beamOn > 0.9) cat.notice('look', 1.5);
+
+  // ---- oven fire and dial
+  fireBoost = Math.max(0, fireBoost - dt * 0.5);
+  const flick = 0.8 + 0.2 * wobble(t * 3) + fireBoost * 0.6;
+  flames.forEach((fl, i) => { const h = fl.h * (0.85 + 0.25 * wobble(t * 4 + i * 2)) * (1 + fireBoost * 0.6), sw = wobble(t * 3 + i) * 3;
+    fl.n.setAttribute('d', `M${fl.x - 7} 360 Q${f(fl.x - 7)} ${f(360 - h * 0.5)} ${f(fl.x + sw)} ${f(360 - h)} Q${f(fl.x + 7)} ${f(360 - h * 0.45)} ${fl.x + 7} 360Z`); });
+  mouthDark.setAttribute('fill', rgb(mix(hex('#2a1a12'), hex('#5a3018'), 0.2 + 0.2 * flick)));
+  fireGlow.setAttribute('opacity', f((0.3 + 0.6 * P.lamp) * flick));
+  const na = -0.6 + 0.9 + Math.sin(t * 0.5) * 0.05 + fireBoost * 0.6;
+  needle.setAttribute('d', `M112 270 L${f(112 + 7 * Math.sin(na))} ${f(270 - 7 * Math.cos(na))}`);
+
+  // ---- pendant lamp
+  const la = lamp.step(wind * 0.15, dt), lx = 560 + 118 * Math.sin(la), ly = 32 + 118 * Math.cos(la);
+  cord.setAttribute('d', `M560 32 L${f(lx)} ${f(ly)}`);
+  shadeG.setAttribute('transform', `translate(${f(lx)} ${f(ly)}) rotate(${f(-la * 57.3)})`);
+  bulb.setAttribute('fill', P.lamp > 0.25 ? '#ffe7a8' : rgb(P.paper));
+  lampGlow.setAttribute('cx', f(lx)); lampGlow.setAttribute('cy', f(ly + 12)); lampGlow.setAttribute('opacity', f(smooth(0.25, 0.7, P.lamp) * 0.75));
+
+  // ---- baker state machine: oven → walk → table → walk back …
+  B.t += dt;
+  let hand = [56, 70], lean = 0, tilt = 0;
+  const reach = [73, 55], lift = [62, 56];
+  if (B.st === 'walk') {
+    B.walkT += dt;
+    const remain = (B.target - B.x) * B.dir;
+    const goT = Math.min(clamp(remain / 34, 0.06, 1), clamp(B.walkT / 0.5, 0.15, 1));
+    B.go = lerp(B.go, goT, 0.25);
+    B.phase += dt / walk.period * B.go;
+    B.x += B.dir * walk.speed * S * dt * B.go;
+    if ((B.target - B.x) * B.dir <= 0.4) { B.x = B.target; B.st = B.dir > 0 ? 'table' : 'oven'; B.t = 0; B.launched = [false, false, false]; }
+  } else B.go = lerp(B.go, 0, 0.3);
+  if (B.st === 'oven') {
+    const u = B.t;
+    if (u < 0.9) { const k = ease(u / 0.9); hand = L2([56, 70], reach, k); lean = 9 * k; }
+    else if (u < 2.3) { hand = reach; lean = 9; }
+    else if (u < 3.2) { if (!B.loaded) { B.loaded = true; fireBoost = Math.max(fireBoost, 0.5); for (let i = 0; i < 8; i++) spawn(R(200, 262), R(286, 300), 1.25); }
+      const k = ease((u - 2.3) / 0.9); hand = L2(reach, [56, 70], k); lean = 9 * (1 - k); }
+    else { B.st = 'turn'; B.t = 0; }
+  } else if (B.st === 'table') {
+    const u = B.t;
+    if (u < 0.7) { const k = ease(u / 0.7); hand = L2([56, 70], lift, k); lean = 3 * k; }
+    else if (u < 2.6) { hand = lift; lean = 3; tilt = 9 * ease(clamp((u - 0.7) / 0.3, 0, 1)) * (1 - ease(clamp((u - 2.3) / 0.3, 0, 1)));
+      [0.85, 1.25, 1.65].forEach((at, i) => { if (u >= at && !B.launched[i]) { B.launched[i] = true; launch(i); } }); }
+    else if (u < 3.2) { const k = ease((u - 2.6) / 0.6); hand = L2(lift, [56, 70], k); lean = 3 * (1 - k); B.loaded = false; }
+    else { B.st = 'turn'; B.t = 0; }
+  } else if (B.st === 'turn') {
+    if (B.t > 0.2 && !B.flipped) { B.dir = -B.dir; B.flipped = true; }
+    if (B.t > 0.45) { B.flipped = false; B.st = 'walk'; B.walkT = 0; B.target = B.dir > 0 ? TX : OX; }
+  }
+  place(fig, B.x, FLOOR, B.dir, S);
+  const p = walk.pose(B.phase, B.go), b = p.bob;
+  uppers.forEach((g) => g.setAttribute('transform', `rotate(${f(lean)} 40 ${f(p.hip[1] + 4)})`));
+  // legs (leading leg on top)
+  p.feet.forEach((fo, i) => { legs[i].draw([p.hip, fo.knee, fo.ankle], [0.3, 0.8]); shoe(shoes[i], fo.ankle, fo.pitch); });
+  const back = 1 - p.front; legsG.append(legs[back].g, shoes[back], legs[p.front].g, shoes[p.front]);
+  // chef's jacket
+  const sh = [41, 41 + b];
+  jacket.setAttribute('d', `M${f(sh[0] - 6.6)} ${f(sh[1] + 1.2)} Q${f(sh[0] - 1)} ${f(sh[1] - 2.6)} ${f(sh[0] + 5.4)} ${f(sh[1] + 1)} Q${f(sh[0] + 9.6)} ${f(sh[1] + 10)} ${f(sh[0] + 8.6)} ${f(66 + b)} L${f(sh[0] + 8.2)} ${f(84 + b)} Q40 ${f(85.5 + b)} 31.2 ${f(84.6 + b)} Q30.4 ${f(66 + b)} ${f(sh[0] - 7.6)} ${f(sh[1] + 5)}Z`);
+  collar.setAttribute('d', `M${f(sh[0] - 3)} ${f(sh[1] - 0.6)} Q${f(sh[0] + 1)} ${f(sh[1] + 2.4)} ${f(sh[0] + 4.6)} ${f(sh[1] + 0.2)} M${f(sh[0] + 3)} ${f(sh[1] + 2)} L${f(sh[0] + 5.2)} ${f(80 + b)}`);
+  buttons.setAttribute('d', [50, 57, 64].map((y) => oval(sh[0] + 4.4, y + b, 0.8, 0.8) + oval(sh[0] + 7.2, y + b, 0.8, 0.8)).join(' '));
+  // head, toque; click → a nod
+  let nodA = 0; if (B.nod >= 0) { B.nod += dt; nodA = Math.sin(clamp(B.nod / 1.2, 0, 1) * Math.PI * 2) * 10 * (B.nod < 1.2 ? 1 : 0); if (B.nod > 1.3) B.nod = -1; }
+  const hc = [43, 31.4 + b];
+  headG.setAttribute('transform', `rotate(${f(Math.abs(nodA))} 41.5 ${f(40 + b)})`);
+  neck.setAttribute('d', `M40.4 ${f(35 + b)} L40.6 ${f(41 + b)} M43.2 ${f(35.6 + b)} L43 ${f(41 + b)}`);
+  head.setAttribute('cx', f(hc[0])); head.setAttribute('cy', f(hc[1]));
+  hair.setAttribute('d', `M${f(hc[0] - 3.9)} ${f(hc[1] - 2)} Q${f(hc[0] - 4.6)} ${f(hc[1] + 2)} ${f(hc[0] - 2.4)} ${f(hc[1] + 3)} Q${f(hc[0] - 2)} ${f(hc[1])} ${f(hc[0] - 1)} ${f(hc[1] - 2.4)}Z`);
+  ear.setAttribute('d', `M${f(hc[0] - 0.8)} ${f(hc[1] - 0.6)} q1.2 0.4 0.4 2`);
+  band.setAttribute('d', `M${f(hc[0] - 4.4)} ${f(hc[1] - 2.4)} L${f(hc[0] + 4.6)} ${f(hc[1] - 2.8)} L${f(hc[0] + 4.8)} ${f(hc[1] - 7.2)} L${f(hc[0] - 4.6)} ${f(hc[1] - 6.8)}Z`);
+  puff.setAttribute('d', `M${f(hc[0] - 4.6)} ${f(hc[1] - 6.8)} Q${f(hc[0] - 9)} ${f(hc[1] - 9.4)} ${f(hc[0] - 6.4)} ${f(hc[1] - 15)} Q${f(hc[0] - 4.6)} ${f(hc[1] - 20.4)} ${f(hc[0] + 0.6)} ${f(hc[1] - 19.4)} Q${f(hc[0] + 7.4)} ${f(hc[1] - 20.4)} ${f(hc[0] + 8.4)} ${f(hc[1] - 14)} Q${f(hc[0] + 9.6)} ${f(hc[1] - 9.4)} ${f(hc[0] + 4.8)} ${f(hc[1] - 7.2)}Z`);
+  pleats.setAttribute('d', `M${f(hc[0] - 2.6)} ${f(hc[1] - 7.2)} Q${f(hc[0] - 4.4)} ${f(hc[1] - 11)} ${f(hc[0] - 3)} ${f(hc[1] - 15)} M${f(hc[0] + 0.4)} ${f(hc[1] - 7.4)} Q${f(hc[0] - 0.4)} ${f(hc[1] - 12)} ${f(hc[0] + 0.8)} ${f(hc[1] - 16.4)} M${f(hc[0] + 3)} ${f(hc[1] - 7.4)} Q${f(hc[0] + 4.8)} ${f(hc[1] - 11)} ${f(hc[0] + 4.4)} ${f(hc[1] - 15)}`);
+  // apron, drawn around the forward knee so it opens and closes with the stride
+  const kF = p.feet[p.front].knee, aF = p.feet[p.front].ankle, fx = Math.max(kF[0] + 2.4, 48.6);
+  apron.setAttribute('d', `M33.2 ${f(68 + b)} L48.6 ${f(68 + b)} Q${f(fx)} ${f(82 + b * 0.5)} ${f(Math.max(fx, aF[0] - 4))} 101 Q${f(40)} 102.6 35.2 101.6 Q32.6 86 33.2 ${f(68 + b)}Z`);
+  apron.setAttribute('fill', tint('#6f8fae', P));
+  apronTie.setAttribute('d', `M33.4 ${f(69 + b)} q-3 0.4 -4.6 4 M33.4 ${f(69 + b)} q-3.4 -2 -5.6 -0.6 M48.6 ${f(68 + b)} L33.2 ${f(68 + b)}`);
+  // tray: carried on both hands, lags the step a little
+  const accel = Math.cos(4 * Math.PI * B.phase) * 1.4 * B.go;
+  const ta = trayP.step(-accel, dt) * 2.4 + tilt;
+  const hy = handY.step(b * 0.4, dt);
+  const H = [hand[0], hand[1] + b * 0.6 + hy];
+  trayG.setAttribute('transform', `translate(${pt(H)}) rotate(${f(ta)})`);
+  const r = ta * Math.PI / 180, Hf = [H[0] + 9 * Math.cos(r), H[1] + 9 * Math.sin(r) + 0.6];
+  const shN = [sh[0] + 1.6, sh[1] + 2.6], shF = [sh[0] - 1.2, sh[1] + 2];
+  const eN = joint(shN, [H[0] - 1, H[1] + 1.2], 18, 17.5, -1), eF = joint(shF, [Hf[0], Hf[1] + 1.2], 18, 17.5, -1);
+  nearArm.draw([shN, eN, [H[0] - 1, H[1] + 1.2]], [0.2, 0.5]); farArm.draw([shF, eF, [Hf[0], Hf[1] + 1.2]], [0.2, 0.5]);
+  nearHand.setAttribute('d', oval(H[0] - 0.2, H[1] + 1.6, 2.4, 1.7)); farHand.setAttribute('d', oval(Hf[0], Hf[1] + 1.6, 2.4, 1.7));
+  trayLoaves.forEach((l, i) => { l.g.setAttribute('opacity', B.loaded && !B.launched[i] ? 1 : 0); l.b.setAttribute('fill', tint(LOAF, P, 0.45)); });
+
+  // ---- loaves flying from tray to the cloth, then cooling (steam fades)
+  tableLoaves.forEach((L) => {
+    L.b.setAttribute('fill', tint(LOAF, P, 0.45));
+    if (L.fly) { L.fly.u += dt / 0.6; const u = ease(clamp(L.fly.u, 0, 1)), q = L2(L.fly.from, [L.x, L.y], u);
+      L.g.setAttribute('transform', `translate(${f(q[0])} ${f(q[1] - Math.sin(u * Math.PI) * 14)}) rotate(${f((1 - u) * 20)})`);
+      if (L.fly.u >= 1) { L.fly = null; L.fresh = 1; cat.notice('sit', 3.5); } }
+    else L.g.setAttribute('transform', `translate(${L.x} ${L.y})`);
+    L.fresh = Math.max(0, L.fresh - dt / 40);
+  });
+
+  // ---- steam: from the oven mouth always, from fresh loaves, all blown by the pointer wind
+  const want = { oven: 1.1 + fireBoost * 4, tray: B.loaded ? 4 : 0, table: tableLoaves.reduce((a, L) => a + L.fresh * 0.5, 0) };
+  stAcc.oven += want.oven * dt; while (stAcc.oven >= 1) { stAcc.oven--; spawn(R(198, 252), R(289, 296)); }
+  stAcc.tray += want.tray * dt; while (stAcc.tray >= 1) { stAcc.tray--; const l = trayLoaves[(R() * 3) | 0]; if (l.g.getAttribute('opacity') === '1') { const q = sceneOf(trayG, l.x + R(-3, 3), -10); spawn(q[0], q[1], 0.8); } }
+  stAcc.table += want.table * dt; while (stAcc.table >= 1) { stAcc.table--; const c = tableLoaves.filter((L) => L.fresh > 0 && !L.fly); if (c.length) { const L = c[(R() * c.length) | 0]; spawn(L.x + R(-4, 4), L.y - 6, 0.8); } }
+  wisps.forEach((w) => {
+    if (!w.on) return;
+    w.age += dt; if (w.age > w.life) { w.on = false; w.n.setAttribute('opacity', 0); return; }
+    const a = w.age, h = w.h + a * 9, bx = w.x + wind * a * a * 5 + Math.sin(a * 1.7 + w.seed) * 3, by = w.y - a * w.v;
+    const s = w.amp * Math.sin(a * 2.3 + w.seed), s2 = w.amp * Math.sin(a * 1.9 + w.seed + 2);
+    w.n.setAttribute('d', `M${f(bx)} ${f(by)} C${f(bx + s)} ${f(by - h * 0.35)} ${f(bx - s2)} ${f(by - h * 0.65)} ${f(bx + s * 0.6 + wind * 2)} ${f(by - h)}`);
+    w.n.setAttribute('opacity', f(smooth(0, 0.35, a) * (1 - smooth(w.life * 0.45, w.life, a)) * 0.7));
+  });
+
+  cat.draw(t, dt, P);
+  board.setAttribute('fill', tint('#2f3b37', P, 0.3)); cloth.setAttribute('fill', tint('#e9e0cc', P, 0.9));
+}
+
+function launch(i) {
+  const free = tableLoaves.filter((L) => L.g.getAttribute('opacity') === '0' && !L.fly);
+  let L = free[0];
+  if (!L) { L = tableLoaves[B.filled % 9]; } // cloth full: oldest loaf makes room
+  B.filled++;
+  const tl = trayLoaves[i];
+  L.fly = { u: 0, from: sceneOf(trayG, tl.x, -6) };
+  L.g.setAttribute('opacity', 1);
+}
+
+// =============================================================== loop
+// ?t=12 → simulate to 12 s and freeze · ?debug → window.__step(seconds) · ?zoom=x,y,w → zoomed viewBox
+const q = new URLSearchParams(location.search);
+if (q.has('zoom')) { const [zx, zy, zw] = q.get('zoom').split(',').map(Number); svg.setAttribute('viewBox', `${zx} ${zy} ${zw} ${zw / 2}`); }
+if (q.has('t') || q.has('debug') || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  const T = q.has('t') ? Number(q.get('t')) : q.has('debug') ? 0 : 6;
+  let t = 0; draw(0, 1 / 60); while (t < T) draw((t += 1 / 60), 1 / 60);
+  window.__step = (s = 1) => { for (let i = 0, n = Math.round(s * 60); i < n; i++) draw((t += 1 / 60), 1 / 60); return t; };
+} else {
+  let t0 = null, prev = 0;
+  const tick = (now) => { if (t0 === null) t0 = now; const t = (now - t0) / 1000; draw(t, Math.min(0.05, t - prev)); prev = t; requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>
